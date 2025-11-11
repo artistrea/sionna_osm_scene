@@ -224,7 +224,7 @@ def brasilia_osm_polys(
     force_update=False,
     building_high=19.8,
     building_low=6.6,
-    pilotis_probability=0.5,
+    pilotis_probability=0.0,
 ):
     place_query = "Plano Piloto, Brasília, DF, Brasil"
     BRASILIA_OSM_POLYS_PATH = Path("./BRASILIA/")
