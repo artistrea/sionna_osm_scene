@@ -62,7 +62,6 @@ if __name__ == "__main__":
     no_preview = True # Toggle to False to use the preview widget
                       # instead of rendering for scene visualization
 
-
     scene = load_scene("BRASILIA/scene/scene.xml") # Load empty scene
 
     scene.frequency = 3.5e9
@@ -75,41 +74,55 @@ if __name__ == "__main__":
                                  polarization="V")
     scene.rx_array = scene.tx_array
 
-    ds = load_dataset(Path("BRASILIA/ds/"))
+    ds_path = Path("BRASILIA/ds/")
+    ds = load_dataset(ds_path)
+    print(f"using dataset at {ds_path}")
+    print("ds: ")
+    print("\tmax_tx_in_frame", ds.max_tx_in_frame)
+    print("\tn_sets", ds.n_sets)
+    # print("\tmax_height", ds.max_height)
+    # print("\tmin_height", ds.min_height)
+    print("\tmax_path_gain", ds.max_path_gain)
+    print("\tmin_path_gain", ds.min_path_gain)
 
     initial = 0
     for i, item in tqdm(enumerate(ds.items[initial:]), total=len(ds.items), desc="Running RayTracing scenes", initial=initial):
-        # print(f"{item.buildings_frame=}")
-        # print("len(item.tx_positions)", len(item.tx_positions))
-        for j, tx_pos in tqdm(enumerate(item.tx_positions), total=len(item.tx_positions), desc="Different tx positions"):
-            # Define and add a first transmitter to the scene
-            # print("tx_pos", tx_pos)
-            tx = Transmitter(name=f"tx{j}",
-                              position=[
-                                  float(tx_pos[0]),
-                                  float(tx_pos[1]),
-                                  float(tx_pos[2]),
-                              ],
-                              orientation=[0, 0, 0],
-                              power_dbm=0)
-            scene.add(tx)
-            # break
+        # sionna can't handle too many tx at same time, so we make do with this:
+        step = 10
+        tx_id = 0
 
-            # Compute radio map
-            rm_solver = RadioMapSolver()
-            range_x = item.aabb[1][0] - item.aabb[0][0]
-            range_y = item.aabb[1][1] - item.aabb[0][1]
-            size = [range_x, range_y]
-            # print(f"{item.aabb=}")
-            # print(f"{size=}")
-            center_x = (item.aabb[0][0] + item.aabb[1][0]) / 2
-            center_y = (item.aabb[0][1] + item.aabb[1][1]) / 2
-            # center_x, center_y = center_y, center_x
-            center = [center_x, center_y, 1.5]
+        # Compute radio map
+        rm_solver = RadioMapSolver()
+        range_x = item.aabb[1][0] - item.aabb[0][0]
+        range_y = item.aabb[1][1] - item.aabb[0][1]
+        size = [range_x, range_y]
+        # print(f"{item.aabb=}")
+        # print(f"{size=}")
+        center_x = (item.aabb[0][0] + item.aabb[1][0]) / 2
+        center_y = (item.aabb[0][1] + item.aabb[1][1]) / 2
+        # center_x, center_y = center_y, center_x
+        center = [center_x, center_y, 1.5]
+
+        windows_start_i = list(range(0, len(item.tx_positions), step))
+        for wind_s in tqdm(windows_start_i, desc="Different tx positions"):
+            tx_to_consider = item.tx_positions[wind_s:wind_s+step]
+            for j, tx_pos in enumerate(tx_to_consider):
+                # Define and add a first transmitter to the scene
+                tx = Transmitter(name=f"tx{j}",
+                                  position=[
+                                      float(tx_pos[0]),
+                                      float(tx_pos[1]),
+                                      float(tx_pos[2]),
+                                  ],
+                                  orientation=[0, 0, 0],
+                                  power_dbm=0)
+                scene.add(tx)
+                # break
+
             # print(f"{center=}")
             rm = rm_solver(scene,
                            max_depth=2,           # Maximum number of ray scene interactions
-                           samples_per_tx=10**9, # If you increase: less noise, but more memory required
+                           samples_per_tx=10**8, # If you increase: less noise, but more memory required
                            cell_size=(1, 1),      # Resolution of the radio map
                            center=center,         # Center of the radio map
                            size=size,             # Total size of the radio map
@@ -118,15 +131,12 @@ if __name__ == "__main__":
                            specular_reflection=True,
                            diffuse_reflection=False,
                            diffraction=True,
-                           # edge_diffraction=True,
-                           # seed=drjit.cuda.ad.UInt(42),
-                           # stop_threshold=148.,
                        )
 
                 # Metrics have the shape
                 # [num_tx, num_cells_y, num_cells_x]
 
-            # if rm.path_gain.shape != (len(item.tx_positions), range_y, range_x):
+            # if rm.path_gain.shape != (len(tx_to_consider), range_y, range_x):
             #     raise Exception("wrong rm.path_gain.shape")
 
             # print(f"{np.min(rm.path_gain)=}")
@@ -147,44 +157,47 @@ if __name__ == "__main__":
             # )
             # plt.show()
 
-        # for j, tx_pos in enumerate(item.tx_positions):
-            # print(f"{tx_pos=}")
-            # norm_gain = np.copy(gain[j])
-            norm_gain = np.copy(gain[0])
-            cv2.imwrite(f"BRASILIA/ds/gains/IRT2/q9_raw_{i}_{j}.tiff", norm_gain)
-            min_g = -111.
-            norm_gain[norm_gain < min_g] = min_g
-            norm_gain = (norm_gain - min_g) / (-min_g)
+            for j, tx_pos in enumerate(tx_to_consider):
+                # print(f"{tx_pos=}")
+                # norm_gain = np.copy(gain[j])
+                norm_gain = np.copy(gain[j])
+                # cv2.imwrite(f"BRASILIA/ds/gains/IRT2/q9_raw_{i}_{j}.tiff", norm_gain)
+                min_g = ds.min_path_gain
+                max_g = ds.max_path_gain
+                norm_gain[norm_gain < min_g] = min_g
+                norm_gain[norm_gain > max_g] = max_g
+                norm_gain = (norm_gain - min_g) / (max_g-min_g)
 
-            # print(f"{np.min(norm_gain)=}")
-            # print(f"{np.max(norm_gain)=}")
+                # print(f"{np.min(norm_gain)=}")
+                # print(f"{np.max(norm_gain)=}")
 
-            norm_gain = (norm_gain * 255).astype(np.uint8)
+                norm_gain = (norm_gain * 255).astype(np.uint8)
 
-            # print(f"{np.min(norm_gain)=}")
-            # print(f"{np.max(norm_gain)=}")
+                print(f"{np.min(norm_gain)=}")
+                print(f"{np.max(norm_gain)=}")
 
-            # rm.show(metric="path_gain", tx=j).savefig(
-            cv2.imwrite(f"BRASILIA/ds/gains/IRT2/q9_{i}_{j}.png", norm_gain)
-            # rm.show(metric="path_gain", tx=0).savefig(
-            #     f"BRASILIA/ds/gains/IRT2/sim_{i}_{j}.png"
-            # )
-            # # plt.imsave(f"BRASILIA/ds/gains/IRT2/plt_{i}_{j}.png", norm_gain)
-            # plt.close("all")
+                cv2.imwrite(f"BRASILIA/ds/gains/IRT2/{i}_{tx_id}.png", norm_gain)
+                tx_id += 1
+                # rm.show(metric="path_gain", tx=0).savefig(
+                # rm.show(metric="path_gain", tx=j).savefig(
+                #     f"BRASILIA/ds/gains/IRT2/sim_{i}_{tx_id}.png"
+                # )
+                # # plt.imsave(f"BRASILIA/ds/gains/IRT2/plt_{i}_{j}.png", norm_gain)
+                # plt.close("all")
 
-            # print(f'{rm.path_gain.shape=}') # Path gain
-            # print(f'{rm.rss.shape=}') # RSS
-            # print(f'{rm.sinr.shape=}') # SINR
+                # print(f'{rm.path_gain.shape=}') # Path gain
+                # print(f'{rm.rss.shape=}') # RSS
+                # print(f'{rm.sinr.shape=}') # SINR
 
-            # The location of all cell centers in the global coordinate system of the scene
-            # can be accessed via:
-            # [num_cells_y, num_cells_x, 3]
-            # print(f'{rm.cell_centers.shape=}')
-            # print(f'{rm.cell_centers=}')
-            # print(f'{center=}')
+                # The location of all cell centers in the global coordinate system of the scene
+                # can be accessed via:
+                # [num_cells_y, num_cells_x, 3]
+                # print(f'{rm.cell_centers.shape=}')
+                # print(f'{rm.cell_centers=}')
+                # print(f'{center=}')
 
-            scene.remove(f"tx{j}")
-            # if j == 10:
-            #     exit()
+                scene.remove(f"tx{j}")
+                # if j == 10:
+                #     exit()
+                # exit()
             # exit()
-        # exit() 

@@ -35,6 +35,10 @@ class Dataset():
     max_tx_in_frame: int = 0
     n_sets: int = 0
     items: list[DatasetItem] = field(default_factory=list)
+    max_height: float = 19.8 + 3
+    min_height: float = 6.6
+    max_path_gain: float = -50
+    min_path_gain: float = -127
 
 
 def polys2xml(
@@ -87,16 +91,24 @@ def add_buildings_to_scene(scene, buildings, street_edges, mesh_dir):
             shp.geometry.shape(building['geometry'])
         )
         building_height = building["height"]
-        building_ground_height = 0
+        has_pilotis = building["has_pilotis"]
+
+        if has_pilotis:
+            # if the building does have a pilotis let's just make it
+            # start at 3 meters
+            building_ground_height = 3.0
+        else:
+            building_ground_height = 0
+
         z_coordinates = np.full(len(building_points), building_ground_height)
         # bounding polygon
         footprint_plane = points_2d_to_poly(
             building_points, building_ground_height,
         )
         footprint_plane = footprint_plane.triangulate()
-        # print("footprint_plane", footprint_plane)
-        # print("(0, 0, building_height)", (0, 0, building_height))
-        footprint_3D = footprint_plane.extrude((0, 0, building_height), capping=True)
+
+        footprint_3D = footprint_plane.extrude((0, 0, building_height - building_ground_height),
+                                               capping=True)
         footprint_3D.save(str(mesh_dir / f"building_{idx}.ply"))
         local_mesh = o3d.io.read_triangle_mesh(str(mesh_dir / f"building_{idx}.ply"))
         o3d.io.write_triangle_mesh(str(mesh_dir / f"building_{idx}.ply"), local_mesh)
@@ -141,7 +153,7 @@ def add_floor_to_scene(
     footprint_plane.points[:] = (footprint_plane.points - footprint_plane.center)*1.5 + footprint_plane.center
     pv.save_meshio(str(mesh_dir / "ground.ply"),footprint_plane)
 
-    material_type = "mat-itu_concrete"
+    material_type = "mat-itu_medium_dry_ground"
     sionna_shape = ET.SubElement(scene, "shape", type="ply", id=f"mesh-ground")
     ET.SubElement(
         sionna_shape, "string", name="filename",
@@ -166,10 +178,10 @@ def create_default_xml_scene():
     # Define material colors. This is RGB 0-1 formar https://rgbcolorpicker.com/0-1
     material_colors = {
         "mat-itu_concrete": (0.539479, 0.539479, 0.539480),
-        "mat-itu_marble": (0.701101, 0.644479, 0.485150),
-        "mat-itu_metal": (0.219526, 0.219526, 0.254152),
-        "mat-itu_wood": (0.043, 0.58, 0.184),
-        "mat-itu_wet_ground": (0.91,0.569,0.055),
+        # "mat-itu_marble": (0.701101, 0.644479, 0.485150),
+        # "mat-itu_metal": (0.219526, 0.219526, 0.254152),
+        # "mat-itu_wood": (0.043, 0.58, 0.184),
+        "mat-itu_medium_dry_ground": (0.91,0.569,0.055),
     }
 
     scene = ET.Element("scene", version="2.1.0")

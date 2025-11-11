@@ -25,7 +25,12 @@ def bounds(buildings: gpd.GeoDataFrame, street_edges: gpd.GeoDataFrame):
 
     return minx, miny, maxx, maxy
 
-def get_building_height(building, rng=np.random.Generator):
+def get_building_height(
+    building,
+    rng: np.random.Generator,
+    building_low: float,
+    building_high: float,
+):
     """Gets height from a geodataframe row"""
     # if math.isnan(float(building['building:levels'])):
     #     if not isinstance(building["addr:street"], str):
@@ -40,9 +45,33 @@ def get_building_height(building, rng=np.random.Generator):
     #         building_height = 3.5
     # else:
     #     building_height = (int(building['building:levels']) + 1) * 3.5
-    building_height = rng.random() * (19.8 - 6.6) + 6.6
+    building_height = rng.random() * (building_high - building_low) + building_low
 
     return building_height
+    # return 20
+
+def get_building_pilotis_bool(
+    building,
+    rng: np.random.Generator,
+    pilotis_probability: float
+):
+    """Returns a bool for if a building has pilotis from a geodataframe row"""
+    # if math.isnan(float(building['building:levels'])):
+    #     if not isinstance(building["addr:street"], str):
+    #         building_height = 7.5
+    #     elif "CLN " in building["addr:street"] or "CLS " in building["addr:street"]:
+    #         building_height = 8.5
+    #     elif "EQN " in building["addr:street"] or "EQS " in building["addr:street"]:
+    #         building_height = 7.5
+    #     elif "SQN " in building["addr:street"] or "SQS " in building["addr:street"]:
+    #         building_height = 18
+    #     else:
+    #         building_height = 3.5
+    # else:
+    #     building_height = (int(building['building:levels']) + 1) * 3.5
+    has_pilotis = rng.uniform() < pilotis_probability
+
+    return has_pilotis
     # return 20
 
 
@@ -126,31 +155,55 @@ def get_tx_points_on_buildings(
     candidate_points = []
     tx_hs = []
 
-    from tqdm import tqdm
-    # generate candidates
-    step = 12
+    # prepare structure to query buildings and check whether a tx is inside
+    # any
+    polys = []
+    heights = []
 
-    for idx, row in tqdm(buildings.iterrows(), desc="Getting candidate tx points", total=len(buildings)):
+    for idx, row in buildings.iterrows():
         poly = row.geometry
-
         if poly is None:
             continue
-
         if poly.geom_type == "MultiPolygon":
-            polygons = poly.geoms
+            for subpoly in poly.geoms:
+                polys.append(subpoly)
+                heights.append(row["height"])
         else:
-            polygons = [poly]
+            polys.append(poly)
+            heights.append(row["height"])
 
-        tx_height = row["height"] + 3.0
-        for p in polygons:
-            line = p.exterior
-            length = line.length
-            distances = np.arange(0, length - step, step)
-            for d in distances:
-                pt2d = line.interpolate(d)
-                # Adiciona o ponto 3D (x, y, z)
-                candidate_points.append(shp.Point(pt2d.x, pt2d.y))
-                tx_hs.append(tx_height)
+    tree = shp.STRtree(polys)
+
+    from tqdm import tqdm
+    # generate candidates
+    step = 12  # distance between candidates on top of building
+    clearance = 1.0  # 1 meter clearance when checking if building intersects with tx
+
+    for idx, poly in tqdm(enumerate(polys), total=len(polys), desc="Getting candidate tx points"):
+        tx_height = heights[idx] + 3.0
+        line = poly.exterior
+        length = line.length
+        distances = np.arange(0, length - step, step)
+
+        for d in distances:
+            pt2d = line.interpolate(d)
+
+            # check nearby polygons
+            nearby = tree.query(pt2d.buffer(clearance))
+            covered = False
+
+            for j in nearby:
+                if j == idx:
+                    continue
+
+                # and if height of that building is "too much"
+                if heights[j] >= tx_height - 1:
+                    covered = True
+                    break
+
+            # adds 2d point
+            candidate_points.append(pt2d)
+            tx_hs.append(tx_height)
 
     gdf = gpd.GeoDataFrame(
         dict(height=[h for h in tx_hs]),
@@ -159,30 +212,6 @@ def get_tx_points_on_buildings(
     )
 
     return gdf
-
-    # candidate_points_array = np.array([(pt.x, pt.y, pt.z) for pt in candidate_points])
-
-    # tree = scipy.spatial.cKDTree(candidate_points_array)
-    # keep_mask = np.ones(len(candidate_points), dtype=bool)
-    # min_dist = 20
-
-    # for i, pt in enumerate(candidate_points):
-    #     if not keep_mask[i]:
-    #         continue
-    #     # query: todos os pontos dentro de min_dist
-    #     idxs = tree.query_ball_point((pt.x, pt.y), r=min_dist)
-    #     # marca todos exceto o primeiro como False
-    #     idxs = [j for j in idxs if j > i]
-    #     keep_mask[idxs] = False
-
-    # selected_points = candidate_points_array
-
-    # gdf = gpd.GeoDataFrame(
-    #     geometry=[shp.Point(xy) for xy in selected_points],
-    #     crs=street_edges.crs
-    # )
-
-    # return gdf
 
 def get_tx_points(
     buildings, street_edges
@@ -193,6 +222,9 @@ def get_tx_points(
 
 def brasilia_osm_polys(
     force_update=False,
+    building_high=19.8,
+    building_low=6.6,
+    pilotis_probability=0.5,
 ):
     place_query = "Plano Piloto, Brasília, DF, Brasil"
     BRASILIA_OSM_POLYS_PATH = Path("./BRASILIA/")
@@ -221,7 +253,15 @@ def brasilia_osm_polys(
         buildings, streets = gpd.clip(buildings, cut_gdf), gpd.clip(streets, cut_gdf)
         # TODO: move to top of everything
         rng = np.random.default_rng(100)
-        buildings['height'] = [get_building_height(row, rng) for _, row in buildings.iterrows()]
+
+        buildings['height'] = [
+            get_building_height(row, rng, building_low, building_high)
+                for _, row in buildings.iterrows()
+        ]
+        buildings['has_pilotis'] = [
+            get_building_pilotis_bool(row, rng, pilotis_probability)
+                for _, row in buildings.iterrows()
+        ]
 
         tx_pos = get_tx_points(buildings, streets)
 
