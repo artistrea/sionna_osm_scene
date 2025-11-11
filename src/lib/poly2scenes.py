@@ -37,7 +37,17 @@ class Dataset():
     items: list[DatasetItem] = field(default_factory=list)
     max_height: float = 19.8 + 3
     min_height: float = 6.6
-    max_path_gain: float = -50
+    # N0 = -174 dBm/Hz
+    # tx_pow = 23 dBm
+    # BW = 10MHz (or 70 dB)
+    # noise figure = 0dB (ideal)
+    # SNR_thr = 0
+    # N = -174 + 70 + 0 = -104
+    # P_rx,thr = N + SNR_thr = -104 + 0
+    # P_L_thr = 23 - (-104) = 127
+    # P_L_Max = FSPL(min_tx_h - rx_h) = FSPL(6.6 + 3 - 1.5)
+    # P_L_Max = -67 @7GHz
+    max_path_gain: float = -67
     min_path_gain: float = -127
 
 

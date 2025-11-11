@@ -64,8 +64,8 @@ if __name__ == "__main__":
 
     scene = load_scene("BRASILIA/scene/scene.xml") # Load empty scene
 
-    scene.frequency = 3.5e9
-    scene.bandwidth = 20e6
+    scene.frequency = 7e9
+    scene.bandwidth = 10e6
 
     # Configure antenna arrays for all transmitters and receivers
     scene.tx_array = PlanarArray(num_rows=1,
@@ -115,7 +115,7 @@ if __name__ == "__main__":
                                       float(tx_pos[2]),
                                   ],
                                   orientation=[0, 0, 0],
-                                  power_dbm=0)
+                                  power_dbm=23)
                 scene.add(tx)
                 # break
 
